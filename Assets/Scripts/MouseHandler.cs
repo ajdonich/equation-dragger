@@ -28,17 +28,22 @@ public class MouseHandler : MonoBehaviour, IPointerEnterHandler,
     }
 
     public void OnPointerEnter(PointerEventData eventData) {
-        gameObject.GetComponent<UnityEngine.UI.Image>().color = MouseHandler.highlight;
+        // gameObject.GetComponent<UnityEngine.UI.Image>().color = MouseHandler.highlight;
 
-        AbstractTerm term = equationManager.termMap[gameObject];
-        if (term is VariableTerm && gameObject == term.gameObjects[0])
-            term.gameObjects[1].GetComponent<UnityEngine.UI.Image>().color = MouseHandler.highlight;
+        // AbstractTerm term = equationManager.termMap[gameObject];
+        // if (term is VariableTerm && gameObject == term.gameObjects[0])
+        //     term.gameObjects[1].GetComponent<UnityEngine.UI.Image>().color = MouseHandler.highlight;
     }
 
     public void OnPointerExit(PointerEventData eventData) {
-        AbstractTerm term = equationManager.termMap[gameObject];
-        foreach (GameObject go in term.gameObjects) 
-            go.GetComponent<UnityEngine.UI.Image>().color = Color.clear;
+        // AbstractTerm term = equationManager.GetTerm(gameObject);
+        
+        // // Fast term drag can trigger this on mover term, 
+        // // which is not in equation, thus term is null
+        // if (term != null) {
+        //     foreach (GameObject go in term.gameObjects) 
+        //         go.GetComponent<UnityEngine.UI.Image>().color = Color.clear;
+        // }
     }
 
     public void OnDrag(PointerEventData eventData) {
