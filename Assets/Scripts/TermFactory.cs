@@ -5,30 +5,12 @@ using UnityEngine.UI;
 
 public class TermFactory
 {
-    public static AbstractTerm CreateTerm(int value, int denominator=1, bool dropSign=false) {
-        ConstantTerm constTerm = new ConstantTerm(value, denominator);
-        constTerm.instantiate(dropSign);
-        return constTerm;
-    }
-
-    public static AbstractTerm CreateZeroTerm(bool dropSign=true) {
-        ConstantTerm constTerm = new ConstantTerm(0, 1);
-        constTerm.instantiate(dropSign);
-        return constTerm;
-    }
-
-    public static AbstractTerm CreateTerm(string variable, int value, int denominator=1, bool dropSign=false) {
-        VariableTerm varTerm = new VariableTerm(variable, value, denominator);
-        varTerm.instantiate(dropSign);
-        return varTerm;
-    }
-
     public static Text getTextComp(GameObject termGo) {
         return termGo.transform.Find("Text").GetComponent<Text>();
     }
 
+    private static TextGenerator generator = new TextGenerator();
     public static Vector2 getPreferredSize(Text textComp) {
-        TextGenerator generator = new TextGenerator();            
         TextGenerationSettings settings = textComp.GetGenerationSettings(new Vector2(500.0f, 500.0f));
         return new Vector2(generator.GetPreferredWidth(textComp.text, settings), 
                            generator.GetPreferredHeight(textComp.text, settings));
@@ -42,7 +24,7 @@ public class TermFactory
         VerticalLayoutGroup vlgComp = termObj.AddComponent<VerticalLayoutGroup>();
         vlgComp.childAlignment = TextAnchor.MiddleCenter;
         vlgComp.childControlHeight = true;
-        vlgComp.childControlWidth = true;        
+        vlgComp.childControlWidth = true;
 
         // This will set RectTransform sizes (eventually, during layout) 
         ContentSizeFitter csf = termObj.AddComponent<ContentSizeFitter>();
@@ -62,7 +44,7 @@ public class TermFactory
         textComp.color = Color.black;
         textComp.text = text;
 
-        if (clickable) {            
+        if (clickable) {
             // Collider and Rigidbody needed for drag'n drop 
             Rigidbody2D rbComp = termObj.AddComponent<Rigidbody2D>();
             rbComp.bodyType = RigidbodyType2D.Kinematic;
@@ -78,144 +60,101 @@ public class TermFactory
 
 public abstract class AbstractTerm 
 {
-    public List<GameObject> gameObjects = new List<GameObject>();
+    public bool hideSign;
+    public bool hideOne;
+    public Fraction rational;
+    public List<VisualElement> visualElements;
 
-    public abstract void instantiate(bool dropSign);
-    public abstract void setDropSign(bool dropSign);
-    public abstract void setText(int value, int denominator=1);
-    public abstract void setValue(int value, int denominator=1);
-    public abstract int getValue();
+    public abstract Vector2 getBounds();
 
-    public GameObject this[int index] {
-        get => gameObjects[index];
-    }
-
-    public void setParent(Transform parent) {
-        foreach (GameObject go in gameObjects)
-            go.transform.SetParent(parent);
-    }
-
-    public (Vector2 size, Vector2 offset) getBounds(Vector3 lftGoPos) {
-        float xoff = lftGoPos.x;
-        float x, y; x = y = 0.0f;
-        for (int i=0; i<gameObjects.Count; ++i) {
-            Vector2 sz = TermFactory.getPreferredSize(TermFactory.getTextComp(gameObjects[i]));
-            x += sz.x; y = Mathf.Max(y, sz.y);
-            if (i > 0) xoff += sz.x/2;
-        }
-
-        return (new Vector2(x,y), new Vector2(xoff, 0.0f));
+    public VisualElement this[int index] {
+        get => visualElements[index];
     }
 
     public void setTextAlpha(float alpha) {
-        foreach (GameObject go in gameObjects)
-            TermFactory.getTextComp(go).color = 
-                new Color(0.0f, 0.0f, 0.0f, alpha);
+        for (int i=0; i<visualElements.Count; ++i) 
+            visualElements[i].setTextAlpha(alpha);
     }
 
     public void setBgColor(Color col) {
-        foreach (GameObject go in gameObjects)
-            go.GetComponent<UnityEngine.UI.Image>().color = col;
+        for (int i=0; i<visualElements.Count; ++i) 
+            visualElements[i].setBgColor(col);
+    }
+
+    public void update(Fraction rational, bool hideSign, bool hideOne) {
+        if(this.rational != rational || this.hideSign != hideSign || this.hideOne != hideOne) {
+            _fracVisElem().update(rational, hideSign, hideOne);
+            this.rational = rational;
+            this.hideSign = hideSign;
+            this.hideOne = hideOne;
+        }
+    }
+
+    public void setHideSign(bool hideSign) {
+        if(this.hideSign != hideSign) {
+            _fracVisElem().update(rational, hideSign, hideOne);
+            this.hideSign = hideSign;
+        }
+    }
+
+    public void setHideOne(bool hideOne) {
+        if(this.hideOne != hideOne) {
+            _fracVisElem().update(rational, hideSign, hideOne);
+            this.hideOne = hideOne;
+        }
+    }
+
+    public void setValue(Fraction rational) {
+        if (this.rational != rational) {
+            _fracVisElem().update(rational, hideSign, hideOne);
+            this.rational = rational;
+        }
+    }
+
+    public Fraction getValue() {
+        return rational;
+    }
+
+    protected FracVisElem _fracVisElem() {
+        return (FracVisElem)visualElements[0];
     }
 }
 
 public class ConstantTerm : AbstractTerm
 {
-    public int numerator;
-    public int denominator;
-    public bool dropSign;
-
-    public ConstantTerm(int numerator, int denominator=1) {
-        this.numerator = numerator;
-        this.denominator = denominator;
-        this.dropSign = false;
+    public ConstantTerm(GameObject parent, Fraction rational, bool hideSign) {
+        visualElements = new List<VisualElement>();
+        visualElements.Add(new FracVisElem(parent, rational, hideSign, false));
+        this.rational = rational;
+        this.hideSign = hideSign;
+        this.hideOne = false;
     }
 
-    public override void instantiate(bool dropSign=false) {
-        this.dropSign = dropSign;
-        string sign = numerator >= 0 ? " + " : " - ";
-        if (dropSign) sign = numerator < 0 ? "- " : "";
-        string text = sign + System.Math.Abs(numerator).ToString();
-        gameObjects.Add(TermFactory.instantiate(text));
-    }
-
-    public override void setDropSign(bool dropSign) {
-        this.dropSign = dropSign;
-        string sign = numerator >= 0 ? " + " : " - ";
-        if (dropSign) sign = numerator < 0 ? "- " : "";
-        string text = sign + System.Math.Abs(numerator).ToString();
-        TermFactory.getTextComp(gameObjects[0]).text = text;
-    }
-
-    public override void setText(int value, int denominator=1) {
-        string sign = value >= 0 ? " + " : " - ";
-        if (dropSign) sign = value < 0 ? "- " : "";
-        string text = sign + System.Math.Abs(value).ToString();
-        TermFactory.getTextComp(gameObjects[0]).text = text;
-    }
-
-    public override void setValue(int value, int denominator=1) {
-        this.numerator = value;
-        this.denominator = denominator;
-    }
-
-    public override int getValue() {
-        return numerator;
+    public override Vector2 getBounds() {
+        return visualElements[0].bounds;
     }
 }
 
 public class VariableTerm : AbstractTerm
 {
-    public int numerator;
-    public int denominator;
-    public string variable;
-    public bool dropSign;
-
-    public VariableTerm(string variable, int numerator, int denominator=1) {
-        this.numerator = numerator;
-        this.denominator = denominator;
-        this.variable = variable;
+    public VariableTerm(GameObject parent, Fraction rational, string variable, bool hideSign) {
+        visualElements = new List<VisualElement>();
+        visualElements.Add(new FracVisElem(parent, rational, hideSign, true));
+        visualElements.Add(new VarVisElem(parent, variable));
+        this.rational = rational;
+        this.hideSign = hideSign;
+        this.hideOne = true;
     }
 
-    public override void instantiate(bool dropSign=false) {
-        this.dropSign = dropSign;
-        string sign = numerator >= 0 ? " + " : " - ";
-        if (dropSign) sign = numerator < 0 ? "- " : " ";
-        
-        int value = System.Math.Abs(numerator);
-        if (value == 1) gameObjects.Add(TermFactory.instantiate(sign));
-        else gameObjects.Add(TermFactory.instantiate(sign + value.ToString()));
-        gameObjects.Add(TermFactory.instantiate(variable));
+    public Vector3 varOffset {
+        get => Vector3.right * (visualElements[0].bounds.x/2.0f + visualElements[1].bounds.x/2.0f);
     }
 
-    public override void setDropSign(bool dropSign) {
-        this.dropSign = dropSign;
-        string sign = numerator >= 0 ? " + " : " - ";
-        if (dropSign) sign = numerator < 0 ? "- " : " ";
-        
-        int value = System.Math.Abs(numerator);
-        if (value == 1) TermFactory.getTextComp(gameObjects[0]).text = sign;
-        else TermFactory.getTextComp(gameObjects[0]).text = sign + value.ToString();
-        TermFactory.getTextComp(gameObjects[1]).text = variable;
-    }
-
-    public override void setText(int value, int denominator=1) {
-        string sign = value >= 0 ? " + " : " - ";
-        if (dropSign) sign = value < 0 ? "- " : "";
-
-        int absValue = System.Math.Abs(value);
-        if (absValue == 1) TermFactory.getTextComp(gameObjects[0]).text = sign;
-        else TermFactory.getTextComp(gameObjects[0]).text = sign + absValue.ToString();
-        TermFactory.getTextComp(gameObjects[1]).text = variable;
-    }
-
-    public override void setValue(int value, int denominator=1) {
-        this.numerator = value;
-        this.denominator = denominator;
-    }
-
-    public override int getValue() {
-        return numerator;
+    // Note: clipping height to the size of variable, not fraction,
+    // since height just used to evaluate TermSeparated trigger box
+    public override Vector2 getBounds() {
+        Vector2 szcoe = visualElements[0].bounds;
+        Vector2 szvar = visualElements[1].bounds;
+        return new Vector2(szcoe.x + szvar.x, szvar.y);
     }
 }
-

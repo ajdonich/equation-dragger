@@ -11,29 +11,29 @@ public class EquationManager : MonoBehaviour
     ///////////////////////////////////////////////////////////////////////////
 
     public class TermGoState {
-        public int initialValue;
-        public Vector3 position;
+        public Fraction initialValue;
+        public Vector3 tsposition; // typeset position
         public AbstractTerm at;
-        public GameObject go;
+        public VisualElement ve;
 
-        public TermGoState(AbstractTerm at_a, GameObject go_a, Vector3 position_a) {
+        public TermGoState(AbstractTerm at_a, VisualElement ve_a, Vector3 position_a) {
             initialValue = at_a.getValue();
-            position = position_a;
+            tsposition = position_a;
             at = at_a;
-            go = go_a;
+            ve = ve_a;
         }
 
-        public TermGoState(AbstractTerm at_a, GameObject go_a) 
-            : this(at_a, go_a, go_a.transform.position) {}
+        public TermGoState(AbstractTerm at_a, VisualElement ve_a) 
+            : this(at_a, ve_a, ve_a.rootPos) {}
 
         public TermGoState(TermGoState tgs) {
             initialValue = tgs.initialValue;
-            position = tgs.position; 
+            tsposition = tgs.tsposition; 
             at = tgs.at;
-            go = tgs.go;
+            ve = tgs.ve;
         }
 
-        public void updateValue(int value) {
+        public void updateValue(Fraction value) {
             at.setValue(value);
             initialValue = value;
         }
@@ -46,11 +46,6 @@ public class EquationManager : MonoBehaviour
     private Stack<List<TermGoState>> history;
     private List<TermGoState> disolves;
     
-    public enum SideType { 
-        LHS = 1, 
-        RHS = 2
-    }
-
     public enum ClickedType { 
         Constant = 1, 
         Coefficient = 2, 
@@ -60,10 +55,11 @@ public class EquationManager : MonoBehaviour
     public enum MoveState {
         InitialTouch = 1,
         TouchAborted = 2,
-        TermSeparated = 3,
-        DropAtCursor = 4,
-        ConstOverConst = 5,
-        DropAtConst = 6
+        AddTermSeparated = 3,
+        MultTermSeparated = 4,
+        DropAtCursor = 5,
+        TermOverSum = 6,
+        DropAtSum = 7
     }
 
     void Start() {
@@ -85,26 +81,20 @@ public class EquationManager : MonoBehaviour
         cursor.SetActive(false);
     }
 
-    // Only searches currently active GameObjects
-    public AbstractTerm GetTerm(GameObject go) {
-        TermGoState tgs = history.Peek().Find(tgs => tgs.go == go);
-        return tgs != null ? tgs.at : null;
-    }
-
     private Vector3 GetHistPos(GameObject go) {
-        TermGoState tgs = history.Peek().Find(tgs => tgs.go == go);
-        return tgs != null ? tgs.position : Vector3.zero;
+        TermGoState tgs = history.Peek().Find(tgs => tgs.ve.contains(go));
+        return tgs != null ? tgs.tsposition : Vector3.zero;
     }
 
     private int NumLftTerms(List<TermGoState> tgStates=null) {
         if (tgStates == null) tgStates = history.Peek();
         for (int i=0, nLftTerms=0; i<tgStates.Count; ++i) {
-            if (tgStates[i].position.x > 0) return nLftTerms;
+            if (tgStates[i].tsposition.x > 0) return nLftTerms;
             else if (nLftTerms == 0 || tgStates[i-1].at != tgStates[i].at)
                 nLftTerms += 1;
         }
         
-        // Should never get here
+        // Require at least one term per side
         Debug.Assert(false); return 0; 
     }
 
@@ -126,24 +116,30 @@ public class EquationManager : MonoBehaviour
         {
             float prob = ((float)nVarTerms)/(nTerms-i); // Prob of variable term
             bool dropSign = (i == 0 || i == nLftTerms); // Drop if implicit (left-most)
-            int iValue = Random.Range(-20, 20); // Value of coefficient/constant
-            while (iValue == 0) iValue = Random.Range(-20, 20); // No 0 terms
+            Fraction rational = Random.value < 0.5 
+                ? new Fraction(Random.Range(-20, 20), Random.Range(1, 9))
+                : new Fraction(Random.Range(-20, 20), 1);
+
+            // No initial zero terms
+            while (rational.num == 0) 
+                rational = new Fraction(Random.Range(-20, 20), rational.den); 
 
             AbstractTerm at = null;
             if (Random.value < prob) {
-                at = TermFactory.CreateTerm("x", iValue, 1, dropSign);
+                at = new VariableTerm(equation, rational, "x", dropSign);
                 nVarTerms -= 1;
             }
-            else at = TermFactory.CreateTerm(iValue, 1, dropSign);
-            at.setParent(equation.transform);
+            else at = new ConstantTerm(equation, rational, dropSign);
 
-            for (int j=0; j<at.gameObjects.Count; ++j)            
-                history.Peek().Add(new TermGoState(at, at.gameObjects[j]));
+            // Initialize a TermGoState per VisualElement
+            for (int j=0; j<at.visualElements.Count; ++j)
+                history.Peek().Add(new TermGoState(at, at[j]));
         }
 
         // Typeset/position terms
         LayoutTerms(nLftTerms);
     }
+
 
     // Note: expects TermGoStates have been added to history
     private void LayoutTerms(int nLftTerms = -1)
@@ -153,13 +149,9 @@ public class EquationManager : MonoBehaviour
         List<AbstractTerm> terms = new List<AbstractTerm>();
         for (int i=0, tnumb=0; i<tgStates.Count; ++i) {
             if (terms.Count == 0 || terms[terms.Count-1] != tgStates[i].at) {
-                tgStates[i].at.setDropSign(tnumb == 0 || tnumb == nLftTerms);
+                tgStates[i].at.setHideSign(tnumb == 0 || tnumb == nLftTerms);
                 terms.Add(tgStates[i].at); ++tnumb;
             }
-
-            // Set/update collider sizes for all text comps
-            tgStates[i].go.GetComponent<BoxCollider2D>().size = TermFactory.
-                getPreferredSize(TermFactory.getTextComp(tgStates[i].go));
         }
 
         // Equal sign always remains at center/origin
@@ -174,20 +166,28 @@ public class EquationManager : MonoBehaviour
 
         // LHS (negative x-axis)
         for (int i=nLftTerms-1; i>=0; --i) {
-            for (int j=terms[i].gameObjects.Count-1; j>=0; --j) {
-                TermGoState tgs = history.Peek().Find(tgs => tgs.go == terms[i].gameObjects[j]);
-                float w = terms[i].gameObjects[j].GetComponent<BoxCollider2D>().size.x;
-                tgs.position = Vector3.left * (lwidth + w/2.0f); lwidth += w; 
+            for (int j=terms[i].visualElements.Count-1; j>=0; --j) {
+                terms[i].visualElements[j].calculateBounds();
+                Vector2 rect = terms[i].visualElements[j].bounds;
+                TermGoState tgs = history.Peek().Find(tgs => tgs.ve == terms[i].visualElements[j]);
+
+                if (tgs == null) Debug.Log(terms[i].visualElements[j].rootVisElemGo.name);
+
+                tgs.tsposition = Vector3.left * (lwidth + rect.x/2.0f); lwidth += rect.x; 
                 cursorSlots[i] = Vector3.left * lwidth;
             }
         }
 
         // RHS (positive x-axis)
         for (int i=nLftTerms; i<terms.Count; ++i) {
-            for (int j=0; j<terms[i].gameObjects.Count; ++j) {
-                TermGoState tgs = history.Peek().Find(tgs => tgs.go == terms[i].gameObjects[j]);
-                float w = terms[i].gameObjects[j].GetComponent<BoxCollider2D>().size.x;
-                tgs.position = Vector3.right * (rwidth + w/2.0f); rwidth += w; 
+            for (int j=0; j<terms[i].visualElements.Count; ++j) {
+                terms[i].visualElements[j].calculateBounds();
+                Vector2 rect = terms[i].visualElements[j].bounds;
+                TermGoState tgs = history.Peek().Find(tgs => tgs.ve == terms[i].visualElements[j]);
+
+                if (tgs == null) Debug.Log(terms[i].visualElements[j].rootVisElemGo.name);
+
+                tgs.tsposition = Vector3.right * (rwidth + rect.x/2.0f); rwidth += rect.x; 
                 cursorSlots[i+2] = Vector3.right * rwidth;
             }
         }
@@ -204,18 +204,18 @@ public class EquationManager : MonoBehaviour
         List<TermGoState> tgStates = history.Peek();
         Vector3[] initPos = new Vector3[tgStates.Count];
         for (int i=0; i<tgStates.Count; ++i)
-            initPos[i] = tgStates[i].go.transform.position;
+            initPos[i] = tgStates[i].ve.rootPos;
 
         float elapsed = 0;
         while (history.Count > 1 && elapsed < duration) 
         {
             for (int i=0; i<tgStates.Count; ++i) {
-                tgStates[i].go.transform.position = Vector3.Lerp(
-                    initPos[i], tgStates[i].position, elapsed/duration);
+                tgStates[i].ve.setPosition(Vector3.Lerp(initPos[i], 
+                    tgStates[i].tsposition, elapsed/duration));
 
-                if (tgStates[i].initialValue != tgStates[i].at.getValue())
-                    tgStates[i].at.setText((int)Mathf.Round(Mathf.Lerp((float)tgStates[i].
-                        initialValue, (float)tgStates[i].at.getValue(), elapsed/duration)));
+                // if (tgStates[i].initialValue != tgStates[i].at.getValue())
+                //     tgStates[i].at.setText((int)Mathf.Round(Mathf.Lerp((float)tgStates[i].
+                //         initialValue, (float)tgStates[i].at.getValue(), elapsed/duration)));
             }
 
             for (int i=0; i<disolves.Count; ++i)
@@ -227,15 +227,13 @@ public class EquationManager : MonoBehaviour
 
         // Assure final "snap" into place
         for (int i=0; i<tgStates.Count; ++i) {
-            tgStates[i].go.transform.position = tgStates[i].position;
-            if (tgStates[i].initialValue != tgStates[i].at.getValue()) {
-                tgStates[i].at.setText(tgStates[i].at.getValue());
+            tgStates[i].ve.setPosition(tgStates[i].tsposition);
+            if (tgStates[i].initialValue != tgStates[i].at.getValue())
                 tgStates[i].updateValue(tgStates[i].at.getValue());                
-            }
         }
         
         for (int i=disolves.Count-1; i>=0; --i) {
-            disolves[i].go.SetActive(false);
+            disolves[i].ve.setActive(false);
             disolves.RemoveAt(i);
         }
 
@@ -245,16 +243,12 @@ public class EquationManager : MonoBehaviour
 
     // GameObjects instantiated in Start() (equation, cursor, equalSign) never
     // need to be destroyed, and equation never even needs to be deactivated.
-    // Note: GameObject operator !=(null) is overloaded to detect Destroyed.
     private void ClearEquation() {
-        while (history != null && history.Count > 0) {
-            foreach (TermGoState tgs in history.Pop())
-                if (tgs.go != null) Destroy(tgs.go); 
-        }
+        while (history != null && history.Count > 0)
+            foreach (TermGoState tgs in history.Pop()) tgs.ve.destroy();
 
         if (disolves != null)
-            foreach (TermGoState tgs in disolves)
-                if (tgs.go != null) Destroy(tgs.go); 
+            foreach (TermGoState tgs in disolves) tgs.ve.destroy();
 
         equalSign.SetActive(false);
         cursor.SetActive(false);
@@ -266,52 +260,61 @@ public class EquationManager : MonoBehaviour
 
     class Mover
     {
-        public SideType sdType;
         public ClickedType clkType;
         public TermGoState mvTgs;
         public MoveState mvState;
+        public GameObject clickedGo;
         public Vector3 offset;
+        public TermGoState varTgs;
+        public bool dragVarLock;
 
-        public Mover(ClickedType type, SideType side, TermGoState tgs, Vector3 mousePosition) {
-            clkType = type; sdType = side; mvTgs = tgs; mvState = MoveState.InitialTouch;
-            offset = Camera.main.WorldToScreenPoint(clickedGo().transform.position) - mousePosition;
+        public Mover(ClickedType type, TermGoState tgs, GameObject go, Vector3 mousePosition) {
+            clkType = type; mvTgs = tgs; mvState = MoveState.InitialTouch; clickedGo = go;
+            offset = Camera.main.WorldToScreenPoint(go.transform.position) - mousePosition;
+            dragVarLock = false;
         }
 
-        public GameObject clickedGo() {
-            return mvTgs.at.gameObjects[clkType == ClickedType.Variable ? 1 : 0];
+        public Fraction getSignedValue(TermGoState olap=null) {
+            float xfinal = (olap != null) ? olap.tsposition.x : mvTgs.ve.rootPos.x;
+            return (mvTgs.tsposition.x * xfinal < 0) ? -mvTgs.initialValue : mvTgs.initialValue;
         }
 
-        public GameObject this[int index] {
-            get => mvTgs.at.gameObjects[index];
+        public void setSignedText(TermGoState olap=null) {
+            Fraction signedValue = getSignedValue(olap);
+            if (signedValue != mvTgs.at.getValue()) {
+                mvTgs.at[0].calculateBounds();
+                mvTgs.at.update(signedValue, false, mvTgs.at.hideOne);
+            }
         }
 
-        public int getSignedValue() {
-            int sdmult = (mvTgs.position.x * mvTgs.go.transform.position.x < 0) ? -1 : 1;
-            return sdmult * mvTgs.at.getValue();
+        // For dropping mover at the cursor, this is 
+        // approximate, LayoutTerms finalizes typeset
+        public void updatePosition(Vector3 cursorPos) {
+            mvTgs.tsposition = cursorPos;
+            if (varTgs != null && additiveMove()) 
+                varTgs.tsposition = cursorPos;
         }
 
-        public void setSignedText() {
-            int signedvalue = getSignedValue();
-            TermFactory.getTextComp(mvTgs.go).text = 
-                (signedvalue >= 0 ? " + " : " - ") + 
-                System.Math.Abs(signedvalue).ToString();
+        public bool additiveMove() {
+            return dragVarLock || !(mvTgs.at is VariableTerm) || (mvTgs.ve.rootPos.y > 0); 
+            // return dragVarLock || (mvTgs.at is VariableTerm && mvTgs.ve.rootPos.y > 0);
         }
 
-        public float getTextAlpha() {
-            return TermFactory.getTextComp(mvTgs.go).color.a;
+        public void lockDragVariable() {
+            dragVarLock = additiveMove();
         }
     }
 
     private Mover mover;
-    private AbstractTerm overlapped;
+    private TermGoState overlapped;
 
     private Vector3 GetCursorPos() {
         if (mover == null) return Vector3.zero;
 
         int minIdx = 0;
-        float minDist = System.Math.Abs(cursorSlots[0].x - mover[0].transform.position.x);
+        float minDist = System.Math.Abs(cursorSlots[0].x - mover.mvTgs.ve.rootPos.x);
         for (int i=1; i<cursorSlots.Length; ++i) {
-            float dist = System.Math.Abs(cursorSlots[i].x - mover[0].transform.position.x);
+            float dist = System.Math.Abs(cursorSlots[i].x - mover.mvTgs.ve.rootPos.x);
             if (dist < minDist) {
                 minDist = dist;
                 minIdx = i;
@@ -332,7 +335,7 @@ public class EquationManager : MonoBehaviour
         for (int i=0; i<tgStates.Count; ++i) {
             if (atPrev != tgStates[i].at) {
                 atPrev = tgStates[i].at; 
-                if (tgStates[i].position.x < 0) {
+                if (tgStates[i].tsposition.x < 0) {
                     if (tgStates[i].at.getValue() == 0) ztLftIdx.Add(i);
                     nlft += 1;
                 }
@@ -362,23 +365,24 @@ public class EquationManager : MonoBehaviour
             if (!OverlapsEquation(mover)) 
             {
                 // Generate intermediate (mid-drag) equation state
+                bool addmv = mover.additiveMove();
                 List<TermGoState> tgStates = history.Peek();
                 List<TermGoState> dragStates = new List<TermGoState>();
                 for (int i=0; i<tgStates.Count; ++i) {
-                    if (mover.mvTgs.at == tgStates[i].at) continue;
-                    dragStates.Add(tgStates[i]);
+                    if (mover.mvTgs.at != tgStates[i].at || (mover.mvTgs.ve != tgStates[i].ve && !addmv))
+                        dragStates.Add(tgStates[i]);
                 }
 
                 // Replace mover term with zero term if need be
-                if (dragStates[0].position.x > 0 || dragStates[dragStates.Count-1].position.x < 0) {
-                    AbstractTerm zt = TermFactory.CreateZeroTerm();
-                    zt.setParent(equation.transform);
-                    dragStates.Insert(dragStates[0].position.x > 0 ? 0 : dragStates.Count, 
-                        new TermGoState(zt, zt.gameObjects[0], mover.mvTgs.position));                    
+                if (dragStates[0].tsposition.x > 0 || dragStates[dragStates.Count-1].tsposition.x < 0) {                    
+                    AbstractTerm zt = new ConstantTerm(equation, new Fraction(0,1), true);
+                    dragStates.Insert(dragStates[0].tsposition.x > 0 ? 0 : dragStates.Count, 
+                        new TermGoState(zt, zt[0], mover.mvTgs.tsposition));                    
                 }
 
-                mover.setSignedText();
-                mover.mvState = MoveState.TermSeparated;
+                mover.mvState = addmv
+                    ? MoveState.AddTermSeparated
+                    : MoveState.MultTermSeparated;
                 cursor.SetActive(true);
                 history.Push(dragStates);
                 LayoutTerms();
@@ -391,12 +395,23 @@ public class EquationManager : MonoBehaviour
             LayoutTerms();
             break;
         }
-        case MoveState.TermSeparated:
+        case MoveState.AddTermSeparated:
         {
             mover.setSignedText();
+            mover.lockDragVariable();
             cursor.transform.position = GetCursorPos();
-            if (GetOverlappedTerm(mover) is ConstantTerm)
-                mover.mvState = MoveState.ConstOverConst;
+            TermGoState olap = GetOverlappedTgs(mover);
+            if (olap != null && ((mover.mvTgs.at is ConstantTerm && olap.at is ConstantTerm) || 
+                (mover.mvTgs.at is VariableTerm && olap.at is VariableTerm && mover.additiveMove())))
+                mover.mvState = MoveState.TermOverSum;
+
+            // if (GetOverlappedTerm(mover) is ConstantTerm)
+            //     mover.mvState = MoveState.TermOverSum;
+            break;
+        }
+        case MoveState.MultTermSeparated:
+        {
+            
             break;
         }
         case MoveState.DropAtCursor:
@@ -404,10 +419,12 @@ public class EquationManager : MonoBehaviour
             // Generate next equation state (if different)
             List<TermGoState> dragStates = history.Pop();
             mover.mvTgs.updateValue(mover.getSignedValue());
-            mover.mvTgs.position = cursor.transform.position;
+            mover.updatePosition(cursor.transform.position);
             for (int i=0; i<dragStates.Count+1; ++i) {
-                if (i == dragStates.Count || mover.mvTgs.position.x < dragStates[i].position.x) {
+                if (i == dragStates.Count || mover.mvTgs.tsposition.x < dragStates[i].tsposition.x) {
                     dragStates.Insert(i, mover.mvTgs); 
+                    if (mover.varTgs != null && mover.additiveMove())
+                        dragStates.Insert(i+1, mover.varTgs); 
                     break;
                 }
             }
@@ -419,23 +436,25 @@ public class EquationManager : MonoBehaviour
             LayoutTerms();
             break;
         }
-        case MoveState.ConstOverConst:
+        case MoveState.TermOverSum:
         {
-            AbstractTerm olap = GetOverlappedTerm(mover);
+            TermGoState olap = GetOverlappedTgs(mover);
+
             if (olap != overlapped) {
                 if (overlapped != null) {
-                    overlapped.setValue(overlapped.getValue() - mover.getSignedValue());
-                    overlapped.setBgColor(Color.clear);
+                    overlapped.at.setValue(overlapped.at.getValue() - mover.getSignedValue(overlapped));
+                    overlapped.at.setBgColor(Color.clear);
                 }
 
-                if (olap is ConstantTerm) {
-                    olap.setValue(olap.getValue() + mover.getSignedValue());
-                    olap.setBgColor(MouseHandler.highlight);
+                if (olap != null && ((mover.mvTgs.at is ConstantTerm && olap.at is ConstantTerm) || 
+                    (mover.mvTgs.at is VariableTerm && olap.at is VariableTerm && mover.additiveMove()))) {
+                    olap.at.setValue(olap.at.getValue() + mover.getSignedValue(olap));
+                    olap.at.setBgColor(MouseHandler.highlight);
                     cursor.SetActive(false);
                     overlapped = olap;
                 }
                 else {
-                    mover.mvState = MoveState.TermSeparated;
+                    mover.mvState = MoveState.AddTermSeparated;
                     cursor.SetActive(true);
                     overlapped = null;
                 }
@@ -443,17 +462,17 @@ public class EquationManager : MonoBehaviour
             }
             break;
         }
-        case MoveState.DropAtConst:
+        case MoveState.DropAtSum:
         {
             if (overlapped != null) {
-                TermGoState tgs = history.Peek().Find(
-                    tgs => tgs.go == overlapped.gameObjects[0]);
-                tgs.updateValue(overlapped.getValue());
-                overlapped.setBgColor(Color.clear);
+                overlapped.updateValue(overlapped.at.getValue());
+                overlapped.at.setBgColor(Color.clear);
 
                 // Remove unnecessary terms
                 CleanZeroTerms(history.Peek());
                 disolves.Add(mover.mvTgs);
+                if (mover.varTgs != null && mover.additiveMove())
+                    disolves.Add(mover.varTgs);
 
                 mover = null;
                 overlapped = null;
@@ -473,25 +492,28 @@ public class EquationManager : MonoBehaviour
         if (mv != null) {
             Collider2D[] results = new Collider2D[5];
             ContactFilter2D nonfilter = new ContactFilter2D().NoFilter();
-            BoxCollider2D mvColl = mv.clickedGo().GetComponent<BoxCollider2D>();
+            BoxCollider2D mvColl = mv.clickedGo.GetComponent<BoxCollider2D>();
             for (int i=0; i<mvColl.OverlapCollider(nonfilter, results); ++i)
                 if(results[i].gameObject == equation) return true;
         }
         return false;
     }
 
-    private AbstractTerm GetOverlappedTerm(Mover mv) {
+    private TermGoState GetOverlappedTgs(Mover mv) {
         if (mv == null) return null;
-              
+
         float maxArea = 0.0f;
-        AbstractTerm maxOverlapped = null;
+        TermGoState maxOverlapped = null;
         Collider2D[] results = new Collider2D[5];
         ContactFilter2D nonfilter = new ContactFilter2D().NoFilter();
-        BoxCollider2D mvColl = mv.clickedGo().GetComponent<BoxCollider2D>();
-        RectTransform mvRect = mv.clickedGo().GetComponent<RectTransform>();
+        BoxCollider2D mvColl = mv.clickedGo.GetComponent<BoxCollider2D>();
+        RectTransform mvRect = mv.clickedGo.GetComponent<RectTransform>();
 
         for (int i=0; i<mvColl.OverlapCollider(nonfilter, results); ++i) {
             if(results[i].gameObject == equation) continue;
+
+            TermGoState tgs = history.Peek().Find(tgs => tgs.ve.contains(results[i].gameObject));
+            if (tgs == null || (mv.mvTgs.at is ConstantTerm && !(tgs.at is ConstantTerm))) continue;
 
             RectTransform udRect = results[i].gameObject.GetComponent<RectTransform>();
             float mv_xMin = mvRect.position.x - mvRect.rect.width/2;
@@ -508,7 +530,7 @@ public class EquationManager : MonoBehaviour
             float area = xlen * ylen;
 
             if (area > maxArea) {
-                maxOverlapped = GetTerm(results[i].gameObject);
+                maxOverlapped = tgs;
                 maxArea = area;
             }
         }
@@ -521,7 +543,7 @@ public class EquationManager : MonoBehaviour
         List<TermGoState> tgStates = history.Peek();
         for (int i=0; i<tgStates.Count; ++i) {
             if (i == 0 || tgStates[i-1].at != tgStates[i].at) {
-                output += $" {tgStates[i].at.getValue()}";
+                output += $"({tgStates[i].tsposition.x}) {tgStates[i].at.getValue()}, ";
             }
         }
         Debug.Log(output);
@@ -529,47 +551,47 @@ public class EquationManager : MonoBehaviour
 
     public void EqPartMouseDown(GameObject termGo, Vector3 mousePosition) {
 
-        TermGoState tgs = history.Peek().Find(tgs => tgs.go == termGo);
-        SideType side = tgs.position.x < 0 ? SideType.LHS : SideType.RHS;
-        AbstractTerm term = GetTerm(termGo);
+        List<TermGoState> tgStates = history.Peek();
+        int idx = tgStates.FindIndex(tgs => tgs.ve.contains(termGo));
+        TermGoState tgs = tgStates[idx];
+        Cursor.visible = false;
 
         // Put equation collider around term's current root position
-        (Vector2 size, Vector2 offset) b = tgs.at.getBounds(GetHistPos(termGo));
         BoxCollider2D bcComp = equation.GetComponent<BoxCollider2D>();
-        bcComp.size = b.size; bcComp.offset = b.offset;
+        bcComp.offset = new Vector2(tgStates[idx].ve.rootPos.x, tgStates[idx].ve.rootPos.y);
+        bcComp.size = tgStates[idx].ve.bounds;
 
         // Initialize mover
-        if (tgs.at is ConstantTerm) 
-            mover = new Mover(ClickedType.Constant, side, tgs, mousePosition);
-        else if (termGo == tgs.at.gameObjects[0])
-            mover = new Mover(ClickedType.Coefficient, side, tgs, mousePosition);
-        else 
-            mover = new Mover(ClickedType.Variable, side, tgs, mousePosition);        
+        if (tgStates[idx].at is ConstantTerm)
+            mover = new Mover(ClickedType.Constant, tgStates[idx], termGo, mousePosition);
+        else if (tgStates[idx].ve is FracVisElem) {
+            mover = new Mover(ClickedType.Coefficient, tgStates[idx], termGo, mousePosition);
+            mover.varTgs = tgStates[idx+1];
+        }
+        else
+            mover = new Mover(ClickedType.Variable, tgStates[idx], termGo, mousePosition);
     }
 
     public void EqPartMouseDrag(GameObject termGo, Vector3 mousePosition) {
         if (mover == null ) return;
+        Vector3 mvScreenPos = mousePosition + mover.offset;
 
         switch (mover.clkType)
         {
         case ClickedType.Constant:
-            mover.mvTgs.go.transform.position = Camera.main.
-                ScreenToWorldPoint(mousePosition + mover.offset);
+            mover.mvTgs.ve.setPosition(Camera.main.ScreenToWorldPoint(mvScreenPos));
             break;
 
         case ClickedType.Coefficient:
-            mover.mvTgs.go.transform.position = 
-                Camera.main.ScreenToWorldPoint(mousePosition + mover.offset);
-
-            // TODO: do this right, like in layout (can't keep setting offset in drag function)
-            // Vector3 offset2 = mover.mvTerm.rootPositions[1] - mover.mvTerm.rootPositions[0];
-            // mover.mvTerm.gameObjects[1].transform.position = Camera.main.
-            //     ScreenToWorldPoint(mousePosition + mover.offset + offset2);
+            mover.mvTgs.ve.setPosition(Camera.main.ScreenToWorldPoint(mvScreenPos));
+            if (mover.additiveMove()) {
+                VariableTerm vt = (VariableTerm)mover.mvTgs.at;
+                vt[1].setPosition(Camera.main.ScreenToWorldPoint(mvScreenPos + vt.varOffset));
+            }
             break;
 
         case ClickedType.Variable:
-            mover.mvTgs.go.transform.position = Camera.main.
-                ScreenToWorldPoint(mousePosition + mover.offset);
+            mover.mvTgs.ve.setPosition(Camera.main.ScreenToWorldPoint(mvScreenPos));
             break;
 
         default:
@@ -579,12 +601,13 @@ public class EquationManager : MonoBehaviour
     }
 
     public void EqPartMouseUp(GameObject termGo, Vector3 mousePosition) {
+        Cursor.visible = true;
         if (mover == null) return;
         else if (mover.mvState == MoveState.InitialTouch)
             mover.mvState = MoveState.TouchAborted;
-        else if (mover.mvState == MoveState.TermSeparated)
+        else if (mover.mvState == MoveState.AddTermSeparated)
             mover.mvState = MoveState.DropAtCursor;
-        else if (mover.mvState == MoveState.ConstOverConst)
-            mover.mvState = MoveState.DropAtConst;
+        else if (mover.mvState == MoveState.TermOverSum)
+            mover.mvState = MoveState.DropAtSum;
     }
 }
